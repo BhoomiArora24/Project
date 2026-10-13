@@ -29,9 +29,22 @@ export function CameraRig({ intro, mouse, reduced, compact }) {
   return null
 }
 
-// Holographic platform: radially faded grid + flat rings, one with a rotating bright arc.
+// Floor: existing radially-faded grid plus a thin, segmented cyan projection (dashed rings that slowly counter-rotate).
+const DASH_V = 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }'
+const DASH_F = `uniform vec3 uColor; uniform float uOpacity; uniform float uCount; uniform float uFill; uniform float uPhase; varying vec2 vUv;
+void main(){ float seg = fract(vUv.x * uCount - uPhase);
+  float a = smoothstep(0.0, 0.05, seg) * (1.0 - smoothstep(uFill - 0.05, uFill, seg));
+  if (uFill > 1.0) a = 1.0;
+  gl_FragColor = vec4(uColor, a * uOpacity);
+  #include <colorspace_fragment>
+}`
+const FLOOR_RINGS = [
+  { r: 2.7, tube: 0.012, count: 9, fill: 0.75, speed: 0.03, op: 0.8 },
+  { r: 2.0, tube: 0.008, count: 5, fill: 0.55, speed: -0.04, op: 0.6 },
+  { r: 3.2, tube: 0.004, count: 1, fill: 1.1, speed: 0, op: 0.22 },
+]
 export function HoloFloor({ intro, reduced }) {
-  const arc = useRef()
+  const phase = useRef([0, 0, 0])
   const mats = useMemo(() => ({
     grid: new THREE.ShaderMaterial({
       transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
@@ -40,24 +53,26 @@ export function HoloFloor({ intro, reduced }) {
       fragmentShader: `uniform float uOp; varying vec2 vUv;
 void main(){ vec2 p = (vUv - 0.5) * 26.0; float d = length(p);
   vec2 g = abs(fract(p - 0.5) - 0.5) / fwidth(p); float l = 1.0 - min(min(g.x, g.y), 1.0);
-  vec3 c = mix(vec3(0.486, 0.227, 0.929), vec3(0.133, 0.827, 0.933), smoothstep(6.0, 0.0, d) * 0.6);
-  gl_FragColor = vec4(c, (l * 0.15 + smoothstep(3.2, 0.0, d) * 0.05) * smoothstep(12.0, 1.0, d) * uOp);
+  vec3 c = mix(vec3(0.486, 0.227, 0.929), vec3(0.133, 0.827, 0.933), smoothstep(6.0, 0.0, d) * 0.85);
+  gl_FragColor = vec4(c, (l * 0.15 + pow(smoothstep(4.0, 0.0, d), 2.0) * 0.14) * smoothstep(12.0, 1.0, d) * uOp);
   #include <colorspace_fragment>
 }` }),
-    line: new THREE.MeshBasicMaterial({ color: '#A78BFA', transparent: true, opacity: 0 }),
-    arc: new THREE.MeshBasicMaterial({ color: '#22D3EE', transparent: true, opacity: 0 }),
+    rings: FLOOR_RINGS.map((r) => new THREE.ShaderMaterial({ vertexShader: DASH_V, fragmentShader: DASH_F, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+      uniforms: { uColor: { value: new THREE.Color('#22D3EE') }, uOpacity: { value: 0 }, uCount: { value: r.count }, uFill: { value: r.fill }, uPhase: { value: 0 } } })),
   }), [])
-  useEffect(() => () => Object.values(mats).forEach((m) => m.dispose()), [mats])
+  useEffect(() => () => { mats.grid.dispose(); mats.rings.forEach((m) => m.dispose()) }, [mats])
   useFrame((_, dt) => {
     const e = c01((intro.current.v - 0.3) / 0.7)
-    mats.grid.uniforms.uOp.value = e; mats.line.opacity = 0.2 * e; mats.arc.opacity = 0.85 * e
-    if (!reduced) arc.current.rotation.z += dt * 0.25
+    mats.grid.uniforms.uOp.value = e
+    mats.rings.forEach((m, i) => {
+      if (!reduced) phase.current[i] = (phase.current[i] + dt * FLOOR_RINGS[i].speed + 1) % 1
+      m.uniforms.uPhase.value = phase.current[i]; m.uniforms.uOpacity.value = FLOOR_RINGS[i].op * e
+    })
   })
   return (
     <group position={[0, -2.3, 0]} rotation-x={-Math.PI / 2}>
       <mesh material={mats.grid}><planeGeometry args={[26, 26]} /></mesh>
-      {[3.0].map((r) => <mesh key={r} material={mats.line}><torusGeometry args={[r, 0.008, 6, 128]} /></mesh>)}
-      <mesh ref={arc} material={mats.arc}><torusGeometry args={[3.4, 0.014, 6, 96, 1.4]} /></mesh>
+      {FLOOR_RINGS.map((r, i) => <mesh key={i} material={mats.rings[i]}><torusGeometry args={[r.r, r.tube, 6, 192]} /></mesh>)}
     </group>
   )
 }
